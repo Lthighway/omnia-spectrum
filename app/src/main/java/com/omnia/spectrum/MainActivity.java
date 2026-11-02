@@ -8,6 +8,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -43,6 +46,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -62,6 +66,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private CameraCaptureSession session;
     private CaptureRequest.Builder previewRequest;
     private Surface cameraSurface;
+    private ImageReader jpegReader;
+    private Size photoSize;
+    private volatile boolean photoBusy = false;
+    private volatile String pendingPhoto;
+    private int jpegOrientation = 90;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
     private final Handler uiHandler = new Handler();
@@ -69,6 +78,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private TargetView targetView;
     private TextView status, measurements, help;
     private Button modeButton, cameraButton;
+    private TextView isoLabel, exposureLabel;
     private SeekBar isoSeek, exposureSeek;
     private String cameraId;
     private boolean front = false, manual = true, active = false, opening = false;
@@ -147,8 +157,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         row1.addView(cameraButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         row1.addView(modeButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         controls.addView(row1);
+        LinearLayout boostRow = new LinearLayout(this);
+        boostRow.addView(button("ISO + EXP. MÁX.", this::maximizeSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
+        boostRow.addView(button("RESTAURAR", this::restoreSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
+        controls.addView(boostRow);
 
-        controls.addView(label("ISO", 12, ORANGE, true));
+        isoLabel=label("ISO", 12, ORANGE, true);
+        controls.addView(isoLabel);
         isoSeek = new SeekBar(this);
         isoSeek.setMax(100);
         isoSeek.setProgress(33);
@@ -163,7 +178,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             public void onStartTrackingTouch(SeekBar s) {}
             public void onStopTrackingTouch(SeekBar s) {}
         });
-        controls.addView(label("EXPOSIÇÃO", 12, ORANGE, true));
+        exposureLabel=label("EXPOSIÇÃO", 12, ORANGE, true);
+        controls.addView(exposureLabel);
         exposureSeek = new SeekBar(this);
         exposureSeek.setMax(100);
         exposureSeek.setProgress(55);
@@ -185,11 +201,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         controls.addView(row2);
 
         LinearLayout row3 = new LinearLayout(this);
-        row3.addView(button("SALVAR FOTO", () -> saveCurrentPhoto("captura")), new LinearLayout.LayoutParams(0, dp(48), 1));
+        row3.addView(button("FOTO NA GALERIA", () -> captureStillPhoto("CAPTURA")), new LinearLayout.LayoutParams(0, dp(48), 1));
         row3.addView(button("EXPORTAR CSV", this::exportCsv), new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(row3);
 
-        help = label("Toque sobre o LED no visor para selecionar o alvo.\nFixe a câmera e use ISO/exposição manuais iguais nas amostras OFF e ON.\nOs números são contraste RGB de imagem, NÃO potência óptica, espectro, UV ou temperatura.", 12, 0xFFAAB4C3, false);
+        help = label("Toque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
         help.setPadding(dp(8), dp(12), dp(8), 0);
         controls.addView(help);
         updateModeText();
@@ -280,6 +296,32 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             Size[] sizes = map.getOutputSizes(SurfaceTexture.class);
             if (sizes == null || sizes.length == 0) throw new IllegalStateException("Prévia não disponível");
             previewSize = chooseSize(sizes);
+            Size[] jpegSizes = map.getOutputSizes(ImageFormat.JPEG);
+            if (jpegSizes == null || jpegSizes.length == 0) throw new IllegalStateException("JPEG indisponível");
+            photoSize = chooseJpegSize(jpegSizes);
+            Integer sensorRotation = ch.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            jpegOrientation = sensorRotation == null ? 90 : sensorRotation;
+            jpegReader = ImageReader.newInstance(photoSize.getWidth(),photoSize.getHeight(),ImageFormat.JPEG,2);
+            jpegReader.setOnImageAvailableListener(reader -> {
+                Image img = null;
+                try {
+                    img = reader.acquireNextImage();
+                    if (img == null) return;
+                    String name = pendingPhoto;
+                    pendingPhoto = null;
+                    if (name != null) {
+                        ByteBuffer data = img.getPlanes()[0].getBuffer();
+                        byte[] bytes = new byte[data.remaining()];
+                        data.get(bytes);
+                        writeJpegToGallery(name, bytes);
+                    }
+                } catch (Exception error) {
+                    showStatus("Falha ao salvar JPEG: " + error.getMessage());
+                } finally {
+                    if (img != null) img.close();
+                    photoBusy = false;
+                }
+            }, cameraHandler);
             SurfaceTexture texture = preview.getSurfaceTexture();
             if (texture == null) throw new IllegalStateException("Textura indisponível");
             texture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
@@ -316,11 +358,21 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .max((a,b) -> Long.compare((long)a.getWidth()*a.getHeight(), (long)b.getWidth()*b.getHeight()))
                 .orElse(sizes[0]);
     }
+    private Size chooseJpegSize(Size[] candidates) {
+        Size best = null;
+        for (Size candidate : candidates) {
+            long pixels = (long)candidate.getWidth() * candidate.getHeight();
+            if (pixels <= 16000000 && (best == null ||
+                pixels > (long)best.getWidth() * best.getHeight())) best = candidate;
+        }
+        if (best != null) return best;
+        return candidates[0];
+    }
     private void createSession(CameraDevice device) {
         try {
             previewRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             previewRequest.addTarget(cameraSurface);
-            device.createCaptureSession(Arrays.asList(cameraSurface), new CameraCaptureSession.StateCallback() {
+            device.createCaptureSession(Arrays.asList(cameraSurface,jpegReader.getSurface()), new CameraCaptureSession.StateCallback() {
                 @Override public void onConfigured(CameraCaptureSession s) {
                     if (camera != device) { s.close(); return; }
                     session = s;
@@ -353,13 +405,31 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
     private long exposureFromProgress(int p) {
         double lower = Math.max(exposureRange.getLower(), 100000L);
-        double upper = Math.min(exposureRange.getUpper(), 250000000L);
+        double upper = Math.max(lower, Math.min(exposureRange.getUpper(), 1000000000L));
         return (long) Math.exp(Math.log(lower) + Math.log(upper/lower)*p/100.0);
     }
+    private void maximizeSensitivity() {
+        manual = true;
+        isoSeek.setProgress(100);
+        exposureSeek.setProgress(100);
+        updateModeText();
+        updateRequest();
+        toast("ISO e exposição máximos permitidos no aplicativo. Apoie o aparelho.");
+    }
+    private void restoreSensitivity() {
+        manual = true;
+        isoSeek.setProgress(40);
+        exposureSeek.setProgress(45);
+        updateModeText();
+        updateRequest();
+    }
+
     private void updateModeText() {
         if (modeButton != null) modeButton.setText(manual ? "MODO: MANUAL" : "MODO: AUTO");
         if (isoSeek != null) isoSeek.setEnabled(manual);
         if (exposureSeek != null) exposureSeek.setEnabled(manual);
+        if (isoLabel != null) isoLabel.setText("ISO: " + iso + " (sensor " + isoRange.getLower() + "–" + isoRange.getUpper() + ")");
+        if (exposureLabel != null) exposureLabel.setText(String.format(Locale.US,"EXPOSIÇÃO: %.2f ms (até %.0f ms no sensor)",exposureNs/1000000.0,exposureRange.getUpper()/1000000.0));
     }
     private void showStatus(String s) { runOnUiThread(() -> { if (status != null) status.setText(s); }); }
     private final Runnable sampler = new Runnable() {
@@ -424,7 +494,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             toast(String.format(Locale.getDefault(),"Sinal diferencial: %.1f / 255",sample.signal-baseline.signal));
         }
         recordCsv(on ? "ON" : "OFF", sample, on ? sample.signal-baseline.signal : 0);
-        saveCurrentPhoto(on ? "IR_ON" : "IR_OFF");
+        captureStillPhoto(on ? "IR_ON" : "IR_OFF");
     }
     private void recordCsv(String name, Measurement m, double delta) {
         String when = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss",Locale.US).format(new Date());
@@ -437,36 +507,69 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             output.write(data.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) { toast("Falha no registro: " + e.getMessage()); }
     }
-    private void saveCurrentPhoto(String prefix) {
-        if (preview == null || !preview.isAvailable()) { toast("Prévia indisponível"); return; }
-        Bitmap b = preview.getBitmap();
-        if (b == null) { toast("Sem imagem para salvar"); return; }
-        String name = prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".jpg";
-        try {
-            Uri uri;
-            if (Build.VERSION.SDK_INT >= 29) {
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME,name);
-                values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");
-                values.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES + "/OMNIA Spectrum");
-                values.put(MediaStore.Images.Media.IS_PENDING,1);
-                uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);
-                if (uri == null) throw new IllegalStateException("Galeria indisponível");
-                try (OutputStream o = getContentResolver().openOutputStream(uri)) {
-                    if (o == null || !b.compress(Bitmap.CompressFormat.JPEG,94,o)) throw new IllegalStateException("Falha JPEG");
-                }
-                values.clear(); values.put(MediaStore.Images.Media.IS_PENDING,0);
-                getContentResolver().update(uri,values,null,null);
-            } else {
-                File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                if (dir == null) throw new IllegalStateException("Pasta indisponível");
-                File f = new File(dir,name);
-                try (OutputStream o=new FileOutputStream(f)) { b.compress(Bitmap.CompressFormat.JPEG,94,o); }
+    private void captureStillPhoto(String prefix) {
+        if (cameraHandler == null) { toast("Câmera indisponível"); return; }
+        cameraHandler.post(() -> {
+            if (camera == null || session == null || jpegReader == null) {
+                showStatus("Câmera não está pronta."); return;
             }
-            toast("Foto salva: " + name);
-        } catch (Exception e) { toast("Falha ao salvar: " + e.getMessage()); }
-        finally { b.recycle(); }
+            if (photoBusy) { showStatus("Aguarde a fotografia anterior."); return; }
+            photoBusy = true;
+            pendingPhoto = prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss_SSS",Locale.US).format(new Date()) + ".jpg";
+            try {
+                CaptureRequest.Builder req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                req.addTarget(jpegReader.getSurface());
+                req.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                req.set(CaptureRequest.CONTROL_AE_MODE,manual ? CaptureRequest.CONTROL_AE_MODE_OFF : CaptureRequest.CONTROL_AE_MODE_ON);
+                if (manual) {
+                    req.set(CaptureRequest.SENSOR_SENSITIVITY,Math.max(isoRange.getLower(),Math.min(isoRange.getUpper(),iso)));
+                    req.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Math.max(exposureRange.getLower(),Math.min(exposureRange.getUpper(),exposureNs)));
+                }
+                req.set(CaptureRequest.JPEG_ORIENTATION,jpegOrientation);
+                req.set(CaptureRequest.JPEG_QUALITY,(byte)95);
+                session.capture(req.build(),new CameraCaptureSession.CaptureCallback(){
+                    @Override public void onCaptureFailed(CameraCaptureSession sess,CaptureRequest request,android.hardware.camera2.CaptureFailure failure) {
+                        photoBusy=false;pendingPhoto=null;
+                        showStatus("Falha de captura Camera2");
+                    }
+                },cameraHandler);
+                showStatus("Fotografando em " + photoSize.getWidth() + " × " + photoSize.getHeight() + "...");
+            } catch(Exception e) {
+                photoBusy=false;pendingPhoto=null;
+                showStatus("Falha de captura: " + e.getMessage());
+            }
+        });
     }
+
+    private void writeJpegToGallery(String name, byte[] jpeg) throws Exception {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME,name);
+            values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");
+            values.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES + "/OMNIA Spectrum");
+            values.put(MediaStore.Images.Media.IS_PENDING,1);
+            Uri uri=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);
+            if(uri==null)throw new IllegalStateException("Galeria indisponível");
+            try {
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IllegalStateException("Arquivo indisponível");
+                    out.write(jpeg);
+                }
+                ContentValues done=new ContentValues();
+                done.put(MediaStore.Images.Media.IS_PENDING,0);
+                getContentResolver().update(uri,done,null,null);
+            } catch(Exception error) {
+                getContentResolver().delete(uri,null,null);
+                throw error;
+            }
+        } else {
+            File dir=getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if(dir==null)throw new IllegalStateException("Diretório indisponível");
+            try(OutputStream out=new FileOutputStream(new File(dir,name))){out.write(jpeg);}
+        }
+        showStatus("Foto salva na galeria: " + name + " (" + jpeg.length / 1024 + " KB)");
+    }
+
     private void exportCsv() {
         File f=new File(getFilesDir(),"measurements.csv");
         if (!f.exists()) { toast("Nenhuma medição registrada"); return; }
@@ -495,11 +598,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
     private synchronized void closeCamera() {
         opening=false;
+        photoBusy=false; pendingPhoto=null;
         try { if(session!=null) session.close(); } catch(Exception ignored) {}
         session=null; previewRequest=null;
         try { if(camera!=null) camera.close(); } catch(Exception ignored) {}
         camera=null;
         if(cameraSurface!=null) {cameraSurface.release();cameraSurface=null;}
+        if(jpegReader!=null) {jpegReader.close();jpegReader=null;}
     }
     private static class Measurement {
         double signal,r,g,b,saturation;

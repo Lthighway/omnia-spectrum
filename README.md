@@ -4,14 +4,17 @@ Aplicativo Android experimental para detectar e documentar luz infravermelha pr�
 
 **Importante:** não é uma câmera térmica, não mede comprimento de onda e não transforma RGB em espectroscopia calibrada. É um detector diferencial de emissão luminosa com captura Camera2 e controles manuais disponíveis no hardware.
 
-## Funções v0.1
+## Funções v0.2
 
 - Prévia em tempo real de câmera frontal/traseira, câmera sob permissão explícita.
 - Controles Camera2 para exposição e ISO (quando suportados).
 - Posicionamento do alvo por toque; contraste RGB da região central contra anel de fundo.
 - Referência OFF, leitura ON e comparação de sinais, com aviso de saturação.
-- Fotografias JPEG locais em `Pictures/OMNIA Spectrum` via MediaStore.
+- Fotografia JPEG do sensor Camera2 (até 16 MP conforme a câmera), salva em `Pictures/OMNIA Spectrum` via MediaStore.
 - Nenhuma permissão de internet, telemetria, anúncios ou envio de fotos.
+
+- Preset **ISO + exposição máximos** dentro do limite do sensor e da janela de até 1 segundo por quadro.
+- Indicadores ao vivo dos valores solicitados de ISO e exposição.
 
 ## Build
 
