@@ -78,6 +78,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private TargetView targetView;
     private TextView status, measurements, help;
     private Button modeButton, cameraButton;
+    private TextView isoLabel, exposureLabel;
     private SeekBar isoSeek, exposureSeek;
     private String cameraId;
     private boolean front = false, manual = true, active = false, opening = false;
@@ -161,7 +162,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         boostRow.addView(button("RESTAURAR", this::restoreSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
         controls.addView(boostRow);
 
-        controls.addView(label("ISO", 12, ORANGE, true));
+        isoLabel=label("ISO", 12, ORANGE, true);
+        controls.addView(isoLabel);
         isoSeek = new SeekBar(this);
         isoSeek.setMax(100);
         isoSeek.setProgress(33);
@@ -176,7 +178,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             public void onStartTrackingTouch(SeekBar s) {}
             public void onStopTrackingTouch(SeekBar s) {}
         });
-        controls.addView(label("EXPOSIÇÃO", 12, ORANGE, true));
+        exposureLabel=label("EXPOSIÇÃO", 12, ORANGE, true);
+        controls.addView(exposureLabel);
         exposureSeek = new SeekBar(this);
         exposureSeek.setMax(100);
         exposureSeek.setProgress(55);
@@ -425,6 +428,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (modeButton != null) modeButton.setText(manual ? "MODO: MANUAL" : "MODO: AUTO");
         if (isoSeek != null) isoSeek.setEnabled(manual);
         if (exposureSeek != null) exposureSeek.setEnabled(manual);
+        if (isoLabel != null) isoLabel.setText("ISO: " + iso + " (sensor " + isoRange.getLower() + "–" + isoRange.getUpper() + ")");
+        if (exposureLabel != null) exposureLabel.setText(String.format(Locale.US,"EXPOSIÇÃO: %.2f ms (até %.0f ms no sensor)",exposureNs/1000000.0,exposureRange.getUpper()/1000000.0));
     }
     private void showStatus(String s) { runOnUiThread(() -> { if (status != null) status.setText(s); }); }
     private final Runnable sampler = new Runnable() {
