@@ -147,6 +147,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         row1.addView(cameraButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         row1.addView(modeButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         controls.addView(row1);
+        LinearLayout boostRow = new LinearLayout(this);
+        boostRow.addView(button("ISO + EXP. MÁX.", this::maximizeSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
+        boostRow.addView(button("RESTAURAR", this::restoreSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
+        controls.addView(boostRow);
 
         controls.addView(label("ISO", 12, ORANGE, true));
         isoSeek = new SeekBar(this);
@@ -189,7 +193,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         row3.addView(button("EXPORTAR CSV", this::exportCsv), new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(row3);
 
-        help = label("Toque sobre o LED no visor para selecionar o alvo.\nFixe a câmera e use ISO/exposição manuais iguais nas amostras OFF e ON.\nOs números são contraste RGB de imagem, NÃO potência óptica, espectro, UV ou temperatura.", 12, 0xFFAAB4C3, false);
+        help = label("Toque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
         help.setPadding(dp(8), dp(12), dp(8), 0);
         controls.addView(help);
         updateModeText();
@@ -353,9 +357,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
     private long exposureFromProgress(int p) {
         double lower = Math.max(exposureRange.getLower(), 100000L);
-        double upper = Math.min(exposureRange.getUpper(), 250000000L);
+        double upper = Math.max(lower, Math.min(exposureRange.getUpper(), 1000000000L));
         return (long) Math.exp(Math.log(lower) + Math.log(upper/lower)*p/100.0);
     }
+    private void maximizeSensitivity() {
+        manual = true;
+        isoSeek.setProgress(100);
+        exposureSeek.setProgress(100);
+        updateModeText();
+        updateRequest();
+        toast("ISO e exposição máximos permitidos no aplicativo. Apoie o aparelho.");
+    }
+    private void restoreSensitivity() {
+        manual = true;
+        isoSeek.setProgress(40);
+        exposureSeek.setProgress(45);
+        updateModeText();
+        updateRequest();
+    }
+
     private void updateModeText() {
         if (modeButton != null) modeButton.setText(manual ? "MODO: MANUAL" : "MODO: AUTO");
         if (isoSeek != null) isoSeek.setEnabled(manual);
