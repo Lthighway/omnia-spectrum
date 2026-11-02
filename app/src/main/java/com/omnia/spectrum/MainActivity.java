@@ -198,7 +198,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         controls.addView(row2);
 
         LinearLayout row3 = new LinearLayout(this);
-        row3.addView(button("SALVAR FOTO", () -> saveCurrentPhoto("captura")), new LinearLayout.LayoutParams(0, dp(48), 1));
+        row3.addView(button("FOTO NA GALERIA", () -> captureStillPhoto("CAPTURA")), new LinearLayout.LayoutParams(0, dp(48), 1));
         row3.addView(button("EXPORTAR CSV", this::exportCsv), new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(row3);
 
@@ -489,7 +489,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             toast(String.format(Locale.getDefault(),"Sinal diferencial: %.1f / 255",sample.signal-baseline.signal));
         }
         recordCsv(on ? "ON" : "OFF", sample, on ? sample.signal-baseline.signal : 0);
-        saveCurrentPhoto(on ? "IR_ON" : "IR_OFF");
+        captureStillPhoto(on ? "IR_ON" : "IR_OFF");
     }
     private void recordCsv(String name, Measurement m, double delta) {
         String when = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss",Locale.US).format(new Date());
@@ -502,36 +502,69 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             output.write(data.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) { toast("Falha no registro: " + e.getMessage()); }
     }
-    private void saveCurrentPhoto(String prefix) {
-        if (preview == null || !preview.isAvailable()) { toast("Prévia indisponível"); return; }
-        Bitmap b = preview.getBitmap();
-        if (b == null) { toast("Sem imagem para salvar"); return; }
-        String name = prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".jpg";
-        try {
-            Uri uri;
-            if (Build.VERSION.SDK_INT >= 29) {
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Images.Media.DISPLAY_NAME,name);
-                values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");
-                values.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES + "/OMNIA Spectrum");
-                values.put(MediaStore.Images.Media.IS_PENDING,1);
-                uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);
-                if (uri == null) throw new IllegalStateException("Galeria indisponível");
-                try (OutputStream o = getContentResolver().openOutputStream(uri)) {
-                    if (o == null || !b.compress(Bitmap.CompressFormat.JPEG,94,o)) throw new IllegalStateException("Falha JPEG");
-                }
-                values.clear(); values.put(MediaStore.Images.Media.IS_PENDING,0);
-                getContentResolver().update(uri,values,null,null);
-            } else {
-                File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                if (dir == null) throw new IllegalStateException("Pasta indisponível");
-                File f = new File(dir,name);
-                try (OutputStream o=new FileOutputStream(f)) { b.compress(Bitmap.CompressFormat.JPEG,94,o); }
+    private void captureStillPhoto(String prefix) {
+        if (cameraHandler == null) { toast("Câmera indisponível"); return; }
+        cameraHandler.post(() -> {
+            if (camera == null || session == null || jpegReader == null) {
+                showStatus("Câmera não está pronta."); return;
             }
-            toast("Foto salva: " + name);
-        } catch (Exception e) { toast("Falha ao salvar: " + e.getMessage()); }
-        finally { b.recycle(); }
+            if (photoBusy) { showStatus("Aguarde a fotografia anterior."); return; }
+            photoBusy = true;
+            pendingPhoto = prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss_SSS",Locale.US).format(new Date()) + ".jpg";
+            try {
+                CaptureRequest.Builder req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                req.addTarget(jpegReader.getSurface());
+                req.set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                req.set(CaptureRequest.CONTROL_AE_MODE,manual ? CaptureRequest.CONTROL_AE_MODE_OFF : CaptureRequest.CONTROL_AE_MODE_ON);
+                if (manual) {
+                    req.set(CaptureRequest.SENSOR_SENSITIVITY,Math.max(isoRange.getLower(),Math.min(isoRange.getUpper(),iso)));
+                    req.set(CaptureRequest.SENSOR_EXPOSURE_TIME,Math.max(exposureRange.getLower(),Math.min(exposureRange.getUpper(),exposureNs)));
+                }
+                req.set(CaptureRequest.JPEG_ORIENTATION,jpegOrientation);
+                req.set(CaptureRequest.JPEG_QUALITY,(byte)95);
+                session.capture(req.build(),new CameraCaptureSession.CaptureCallback(){
+                    @Override public void onCaptureFailed(CameraCaptureSession sess,CaptureRequest request,android.hardware.camera2.CaptureFailure failure) {
+                        photoBusy=false;pendingPhoto=null;
+                        showStatus("Falha de captura Camera2");
+                    }
+                },cameraHandler);
+                showStatus("Fotografando em " + photoSize.getWidth() + " × " + photoSize.getHeight() + "...");
+            } catch(Exception e) {
+                photoBusy=false;pendingPhoto=null;
+                showStatus("Falha de captura: " + e.getMessage());
+            }
+        });
     }
+
+    private void writeJpegToGallery(String name, byte[] jpeg) throws Exception {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME,name);
+            values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");
+            values.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES + "/OMNIA Spectrum");
+            values.put(MediaStore.Images.Media.IS_PENDING,1);
+            Uri uri=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);
+            if(uri==null)throw new IllegalStateException("Galeria indisponível");
+            try {
+                try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                    if(out==null)throw new IllegalStateException("Arquivo indisponível");
+                    out.write(jpeg);
+                }
+                ContentValues done=new ContentValues();
+                done.put(MediaStore.Images.Media.IS_PENDING,0);
+                getContentResolver().update(uri,done,null,null);
+            } catch(Exception error) {
+                getContentResolver().delete(uri,null,null);
+                throw error;
+            }
+        } else {
+            File dir=getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if(dir==null)throw new IllegalStateException("Diretório indisponível");
+            try(OutputStream out=new FileOutputStream(new File(dir,name))){out.write(jpeg);}
+        }
+        showStatus("Foto salva na galeria: " + name + " (" + jpeg.length / 1024 + " KB)");
+    }
+
     private void exportCsv() {
         File f=new File(getFilesDir(),"measurements.csv");
         if (!f.exists()) { toast("Nenhuma medição registrada"); return; }
