@@ -8,6 +8,8 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.ImageFormat;
 import android.media.Image;
 import android.media.ImageReader;
@@ -77,7 +79,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private TextureView preview;
     private TargetView targetView;
     private TextView status, measurements, help;
-    private Button modeButton, cameraButton;
+    private Button modeButton, cameraButton, gainButton;
+    private int digitalGain = 0;
     private TextView isoLabel, exposureLabel;
     private SeekBar isoSeek, exposureSeek;
     private String cameraId;
@@ -157,6 +160,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         row1.addView(cameraButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         row1.addView(modeButton, new LinearLayout.LayoutParams(0, dp(47), 1));
         controls.addView(row1);
+        gainButton = button("REALCE: NATURAL", this::cycleDigitalGain);
+        controls.addView(gainButton,new LinearLayout.LayoutParams(-1,dp(45)));
         LinearLayout boostRow = new LinearLayout(this);
         boostRow.addView(button("ISO + EXP. MÁX.", this::maximizeSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
         boostRow.addView(button("RESTAURAR", this::restoreSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
@@ -205,7 +210,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         row3.addView(button("EXPORTAR CSV", this::exportCsv), new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(row3);
 
-        help = label("Toque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
+        help = label("REALCE DIGITAL altera a visualização, não a sensibilidade física; JPEG salvo permanece sem o realce.\nToque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
         help.setPadding(dp(8), dp(12), dp(8), 0);
         controls.addView(help);
         updateModeText();
@@ -408,6 +413,24 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         double upper = Math.max(lower, Math.min(exposureRange.getUpper(), 1000000000L));
         return (long) Math.exp(Math.log(lower) + Math.log(upper/lower)*p/100.0);
     }
+    private void cycleDigitalGain() {
+        digitalGain = (digitalGain + 1) % 4;
+        float[] levels = {1f, 1.5f, 2.5f, 4f};
+        float factor = levels[digitalGain];
+        String[] labels = {"NATURAL", "1,5×", "2,5×", "4×"};
+        gainButton.setText("REALCE DIGITAL: " + labels[digitalGain]);
+        Paint paint = new Paint();
+        ColorMatrix matrix = new ColorMatrix(new float[] {
+            factor,0,0,0,0,
+            0,factor,0,0,0,
+            0,0,factor,0,0,
+            0,0,0,1,0
+        });
+        paint.setColorFilter(new ColorMatrixColorFilter(matrix));
+        preview.setLayerType(View.LAYER_TYPE_HARDWARE, paint);
+        toast("Realce do visor: " + labels[digitalGain] + ". Foto original preservada.");
+    }
+
     private void maximizeSensitivity() {
         manual = true;
         isoSeek.setProgress(100);
