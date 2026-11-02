@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.BitmapFactory;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.ImageFormat;
@@ -81,6 +82,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private TextView status, measurements, help;
     private Button modeButton, cameraButton, gainButton;
     private int digitalGain = 0;
+    private boolean monochrome = false;
+    private volatile int captureGain = 0;
+    private volatile boolean captureMono = false;
     private TextView isoLabel, exposureLabel;
     private SeekBar isoSeek, exposureSeek;
     private String cameraId;
@@ -162,6 +166,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         controls.addView(row1);
         gainButton = button("REALCE: NATURAL", this::cycleDigitalGain);
         controls.addView(gainButton,new LinearLayout.LayoutParams(-1,dp(45)));
+        controls.addView(button("MONOCROMÁTICO: LIGAR/DESLIGAR", this::toggleMono),new LinearLayout.LayoutParams(-1,dp(45)));
         LinearLayout boostRow = new LinearLayout(this);
         boostRow.addView(button("ISO + EXP. MÁX.", this::maximizeSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
         boostRow.addView(button("RESTAURAR", this::restoreSensitivity), new LinearLayout.LayoutParams(0, dp(46), 1));
@@ -206,11 +211,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         controls.addView(row2);
 
         LinearLayout row3 = new LinearLayout(this);
-        row3.addView(button("FOTO NA GALERIA", () -> captureStillPhoto("CAPTURA")), new LinearLayout.LayoutParams(0, dp(48), 1));
+        row3.addView(button("FOTO ORIGINAL + REALÇADA", () -> captureStillPhoto("CAPTURA")), new LinearLayout.LayoutParams(0, dp(48), 1));
         row3.addView(button("EXPORTAR CSV", this::exportCsv), new LinearLayout.LayoutParams(0, dp(48), 1));
         controls.addView(row3);
 
-        help = label("REALCE DIGITAL altera a visualização, não a sensibilidade física; JPEG salvo permanece sem o realce.\nToque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
+        help = label("A captura salva original e, quando ativado, JPEG realçado na galeria. O realce digital não aumenta a sensibilidade física.\nToque no LED para marcar a região. O modo ISO + EXP. MÁX. tenta revelar luz fraca, mas não amplia o espectro físico do sensor. Possível NIR residual; UV e infravermelho térmico não podem ser ativados por software.\nPara comparar OFF e ON, mantenha os controles idênticos.\nOs valores RGB não são medições espectrais calibradas.", 12, 0xFFAAB4C3, false);
         help.setPadding(dp(8), dp(12), dp(8), 0);
         controls.addView(help);
         updateModeText();
@@ -319,6 +324,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         byte[] bytes = new byte[data.remaining()];
                         data.get(bytes);
                         writeJpegToGallery(name, bytes);
+                        if (captureGain > 0 || captureMono) {
+                            saveEnhancedPhoto(name, bytes, captureGain, captureMono);
+                        }
                     }
                 } catch (Exception error) {
                     showStatus("Falha ao salvar JPEG: " + error.getMessage());
@@ -415,20 +423,26 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
     private void cycleDigitalGain() {
         digitalGain = (digitalGain + 1) % 4;
-        float[] levels = {1f, 1.5f, 2.5f, 4f};
-        float factor = levels[digitalGain];
         String[] labels = {"NATURAL", "1,5×", "2,5×", "4×"};
         gainButton.setText("REALCE DIGITAL: " + labels[digitalGain]);
+        updatePreviewFilter();
+        toast("Visual: " + labels[digitalGain] + ". Fotografias originais preservadas.");
+    }
+    private void toggleMono() {
+        monochrome = !monochrome;
+        updatePreviewFilter();
+        toast(monochrome ? "Visor monocromático ativado." : "Visor em cores.");
+    }
+    private void updatePreviewFilter() {
+        float gain = new float[]{1f, 1.5f, 2.5f, 4f}[digitalGain];
+        ColorMatrix cm = new ColorMatrix();
+        if(monochrome) cm.setSaturation(0f);
+        ColorMatrix boost = new ColorMatrix(new float[]{
+           gain,0,0,0,0, 0,gain,0,0,0, 0,0,gain,0,0, 0,0,0,1,0});
+        cm.postConcat(boost);
         Paint paint = new Paint();
-        ColorMatrix matrix = new ColorMatrix(new float[] {
-            factor,0,0,0,0,
-            0,factor,0,0,0,
-            0,0,factor,0,0,
-            0,0,0,1,0
-        });
-        paint.setColorFilter(new ColorMatrixColorFilter(matrix));
-        preview.setLayerType(View.LAYER_TYPE_HARDWARE, paint);
-        toast("Realce do visor: " + labels[digitalGain] + ". Foto original preservada.");
+        paint.setColorFilter(new ColorMatrixColorFilter(cm));
+        preview.setLayerType(View.LAYER_TYPE_HARDWARE,paint);
     }
 
     private void maximizeSensitivity() {
@@ -538,6 +552,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             }
             if (photoBusy) { showStatus("Aguarde a fotografia anterior."); return; }
             photoBusy = true;
+            captureGain = digitalGain;
+            captureMono = monochrome;
             pendingPhoto = prefix + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss_SSS",Locale.US).format(new Date()) + ".jpg";
             try {
                 CaptureRequest.Builder req = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -591,6 +607,41 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             try(OutputStream out=new FileOutputStream(new File(dir,name))){out.write(jpeg);}
         }
         showStatus("Foto salva na galeria: " + name + " (" + jpeg.length / 1024 + " KB)");
+    }
+
+    private void saveEnhancedPhoto(String name, byte[] original, int gainIndex, boolean gray) {
+        Bitmap src=null, adjusted=null;
+        try {
+            BitmapFactory.Options options=new BitmapFactory.Options();
+            options.inJustDecodeBounds=true;
+            BitmapFactory.decodeByteArray(original,0,original.length,options);
+            long pixels=(long)options.outWidth*options.outHeight;
+            options.inJustDecodeBounds=false;
+            options.inSampleSize=pixels>8000000L?2:1;
+            src=BitmapFactory.decodeByteArray(original,0,original.length,options);
+            if(src==null)throw new IllegalStateException("JPEG não decodificado");
+            adjusted=Bitmap.createBitmap(src.getWidth(),src.getHeight(),Bitmap.Config.ARGB_8888);
+            Canvas canvas=new Canvas(adjusted);
+            float gain=new float[]{1f,1.5f,2.5f,4f}[gainIndex];
+            ColorMatrix m=new ColorMatrix();
+            if(gray)m.setSaturation(0f);
+            m.postConcat(new ColorMatrix(new float[]{
+                gain,0,0,0,0, 0,gain,0,0,0, 0,0,gain,0,0, 0,0,0,1,0
+            }));
+            Paint p=new Paint(Paint.FILTER_BITMAP_FLAG);
+            p.setColorFilter(new ColorMatrixColorFilter(m));
+            canvas.drawBitmap(src,0,0,p);
+            java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+            if(!adjusted.compress(Bitmap.CompressFormat.JPEG,92,output))throw new IllegalStateException("Compressão falhou");
+            String processed=name.replace(".jpg","_REALCE"+gainIndex+(gray?"_MONO":"")+".jpg");
+            writeJpegToGallery(processed,output.toByteArray());
+            showStatus("Original + versão realçada salvos na galeria.");
+        } catch(Exception error) {
+            showStatus("Original salvo; realce falhou: "+error.getMessage());
+        } finally {
+            if(adjusted!=null)adjusted.recycle();
+            if(src!=null)src.recycle();
+        }
     }
 
     private void exportCsv() {

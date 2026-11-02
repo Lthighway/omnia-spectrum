@@ -29,18 +29,18 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk omnia-spectrum-v0.3.0-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk omnia-spectrum-v0.4.0-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: omnia-spectrum-debug-apk
-          path: omnia-spectrum-v0.3.0-debug.apk
+          path: omnia-spectrum-v0.4.0-debug.apk
       - name: Publish initial APK release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view v0.3.0 >/dev/null 2>&1; then
-            gh release create v0.3.0 omnia-spectrum-v0.3.0-debug.apk --title "OMNIA Spectrum v0.3.0 (experimental)" --notes "APK de teste, assinado com chave de debug. Captura óptica experimental offline; não mede radiação térmica ou espectro calibrado." --latest
+          if ! gh release view v0.4.0 >/dev/null 2>&1; then
+            gh release create v0.4.0 omnia-spectrum-v0.4.0-debug.apk --title "OMNIA Spectrum v0.4.0 (experimental)" --notes "APK de teste, assinado com chave de debug. Captura óptica experimental offline; não mede radiação térmica ou espectro calibrado." --latest
           else
-            gh release upload v0.3.0 omnia-spectrum-v0.3.0-debug.apk --clobber
+            gh release upload v0.4.0 omnia-spectrum-v0.4.0-debug.apk --clobber
           fi

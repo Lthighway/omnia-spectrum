@@ -4,7 +4,7 @@ Aplicativo Android experimental para detectar e documentar luz infravermelha pr�
 
 **Importante:** não é uma câmera térmica, não mede comprimento de onda e não transforma RGB em espectroscopia calibrada. É um detector diferencial de emissão luminosa com captura Camera2 e controles manuais disponíveis no hardware.
 
-## Funções v0.3
+## Funções v0.4
 
 - Prévia em tempo real de câmera frontal/traseira, câmera sob permissão explícita.
 - Controles Camera2 para exposição e ISO (quando suportados).
@@ -18,7 +18,7 @@ Aplicativo Android experimental para detectar e documentar luz infravermelha pr�
 
 - Realce digital do visor em 1,5× / 2,5× / 4×, sem adulterar o JPEG capturado (ganho apenas visual).
 
-## Build
+- Salva uma cópia realçada digitalmente, além do JPEG original, quando realce ou monocromático estiver ativo. A imagem realçada tem resolução limitada a ~8MP para reduzir uso de memória; não representa ganho físico do sensor.\n\n## Build
 
 O fluxo GitHub Actions compila o APK de depuração com Android Gradle Plugin 8.9.2 / Gradle 8.11.1 / JDK 17 e publica o APK em um artefato do workflow. A publicação em Releases requer compilação bem-sucedida.
 
