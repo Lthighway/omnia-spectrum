@@ -8,6 +8,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -43,6 +46,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -62,6 +66,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private CameraCaptureSession session;
     private CaptureRequest.Builder previewRequest;
     private Surface cameraSurface;
+    private ImageReader jpegReader;
+    private Size photoSize;
+    private volatile boolean photoBusy = false;
+    private volatile String pendingPhoto;
+    private int jpegOrientation = 90;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
     private final Handler uiHandler = new Handler();
@@ -284,6 +293,32 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             Size[] sizes = map.getOutputSizes(SurfaceTexture.class);
             if (sizes == null || sizes.length == 0) throw new IllegalStateException("Prévia não disponível");
             previewSize = chooseSize(sizes);
+            Size[] jpegSizes = map.getOutputSizes(ImageFormat.JPEG);
+            if (jpegSizes == null || jpegSizes.length == 0) throw new IllegalStateException("JPEG indisponível");
+            photoSize = chooseJpegSize(jpegSizes);
+            Integer sensorRotation = ch.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            jpegOrientation = sensorRotation == null ? 90 : sensorRotation;
+            jpegReader = ImageReader.newInstance(photoSize.getWidth(),photoSize.getHeight(),ImageFormat.JPEG,2);
+            jpegReader.setOnImageAvailableListener(reader -> {
+                Image img = null;
+                try {
+                    img = reader.acquireNextImage();
+                    if (img == null) return;
+                    String name = pendingPhoto;
+                    pendingPhoto = null;
+                    if (name != null) {
+                        ByteBuffer data = img.getPlanes()[0].getBuffer();
+                        byte[] bytes = new byte[data.remaining()];
+                        data.get(bytes);
+                        writeJpegToGallery(name, bytes);
+                    }
+                } catch (Exception error) {
+                    showStatus("Falha ao salvar JPEG: " + error.getMessage());
+                } finally {
+                    if (img != null) img.close();
+                    photoBusy = false;
+                }
+            }, cameraHandler);
             SurfaceTexture texture = preview.getSurfaceTexture();
             if (texture == null) throw new IllegalStateException("Textura indisponível");
             texture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
@@ -320,11 +355,21 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .max((a,b) -> Long.compare((long)a.getWidth()*a.getHeight(), (long)b.getWidth()*b.getHeight()))
                 .orElse(sizes[0]);
     }
+    private Size chooseJpegSize(Size[] candidates) {
+        Size best = null;
+        for (Size candidate : candidates) {
+            long pixels = (long)candidate.getWidth() * candidate.getHeight();
+            if (pixels <= 16000000 && (best == null ||
+                pixels > (long)best.getWidth() * best.getHeight())) best = candidate;
+        }
+        if (best != null) return best;
+        return candidates[0];
+    }
     private void createSession(CameraDevice device) {
         try {
             previewRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             previewRequest.addTarget(cameraSurface);
-            device.createCaptureSession(Arrays.asList(cameraSurface), new CameraCaptureSession.StateCallback() {
+            device.createCaptureSession(Arrays.asList(cameraSurface,jpegReader.getSurface()), new CameraCaptureSession.StateCallback() {
                 @Override public void onConfigured(CameraCaptureSession s) {
                     if (camera != device) { s.close(); return; }
                     session = s;
@@ -515,11 +560,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
     private synchronized void closeCamera() {
         opening=false;
+        photoBusy=false; pendingPhoto=null;
         try { if(session!=null) session.close(); } catch(Exception ignored) {}
         session=null; previewRequest=null;
         try { if(camera!=null) camera.close(); } catch(Exception ignored) {}
         camera=null;
         if(cameraSurface!=null) {cameraSurface.release();cameraSurface=null;}
+        if(jpegReader!=null) {jpegReader.close();jpegReader=null;}
     }
     private static class Measurement {
         double signal,r,g,b,saturation;
