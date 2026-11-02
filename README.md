@@ -4,7 +4,7 @@ Aplicativo Android experimental para detectar e documentar luz infravermelha pr�
 
 **Importante:** não é uma câmera térmica, não mede comprimento de onda e não transforma RGB em espectroscopia calibrada. É um detector diferencial de emissão luminosa com captura Camera2 e controles manuais disponíveis no hardware.
 
-## Funções v0.2
+## Funções v0.3
 
 - Prévia em tempo real de câmera frontal/traseira, câmera sob permissão explícita.
 - Controles Camera2 para exposição e ISO (quando suportados).
@@ -15,6 +15,8 @@ Aplicativo Android experimental para detectar e documentar luz infravermelha pr�
 
 - Preset **ISO + exposição máximos** dentro do limite do sensor e da janela de até 1 segundo por quadro.
 - Indicadores ao vivo dos valores solicitados de ISO e exposição.
+
+- Realce digital do visor em 1,5× / 2,5× / 4×, sem adulterar o JPEG capturado (ganho apenas visual).
 
 ## Build
 
